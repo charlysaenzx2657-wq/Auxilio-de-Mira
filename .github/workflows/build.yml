@@ -29,7 +29,15 @@ jobs:
           echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
       - name: Compilar APK
         run: gradle assembleRelease --no-daemon
+      - name: Verificar APK
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -n1)
+          echo "Archivo: $APK"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+          "$BT/apksigner" verify --verbose "$APK"
+          "$BT/aapt2" dump badging "$APK" | head -n 5
+          cp "$APK" AuxilioDeMira.apk
       - uses: actions/upload-artifact@v4
         with:
           name: ToquePreciso-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: AuxilioDeMira.apk
