@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.ToquePreciso" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#12182C</item>
+        <item name="android:statusBarColor">#12182C</item>
+        <item name="android:navigationBarColor">#12182C</item>
+    </style>
+</resources>
