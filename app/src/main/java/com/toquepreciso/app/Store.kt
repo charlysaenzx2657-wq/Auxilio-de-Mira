@@ -81,6 +81,9 @@ class Store(ctx: Context) {
         get() = p.getInt("pos_y", -1)
         set(v) { p.edit().putInt("pos_y", v).apply() }
 
+    fun picked(): Set<String> = (p.getStringSet("picked", emptySet()) ?: emptySet()).toSet()
+    fun setPicked(v: Set<String>) { p.edit().putStringSet("picked", v.toSet()).apply() }
+
     fun backup(): JSONObject = JSONObject(p.getString("backup", "{}") ?: "{}")
     fun saveBackup(o: JSONObject) { p.edit().putString("backup", o.toString()).apply() }
 }
