@@ -25,13 +25,15 @@ object Knobs {
         Knob("dt", "Doble toque", 100f, 500f, 50f) { v -> "${v.toInt()} ms" },
         Knob("an", "Escala de animaciones", 0f, 1f, 0.25f) { v -> if (v == 0f) "Apagadas" else "${v}x" },
         Knob("hz", "Tasa de refresco", 60f, 120f, 30f) { v -> "${v.toInt()} Hz" },
-        Knob("hp", "Vibración al tocar", 0f, 2f, 1f) { v -> listOf("Apagada", "Suave", "Fuerte")[v.toInt()] }
+        Knob("hp", "Vibración al tocar", 0f, 2f, 1f) { v -> listOf("Apagada", "Suave", "Fuerte")[v.toInt()] },
+        Knob("fr", "Fricción de deslizamiento", 0.5f, 2f, 0.25f) { v -> "${v}x" },
+        Knob("sv", "Velocidad de desplazamiento", 0.5f, 2f, 0.25f) { v -> "${v}x" }
     )
 
     val defaults: Map<Level, Map<String, Float>> = mapOf(
-        Level.BAJA to mapOf("ptr" to -3f, "lp" to 500f, "dt" to 300f, "an" to 1f, "hz" to 60f, "hp" to 2f),
-        Level.MEDIA to mapOf("ptr" to -2f, "lp" to 300f, "dt" to 250f, "an" to 0.5f, "hz" to 90f, "hp" to 1f),
-        Level.MAX to mapOf("ptr" to -1f, "lp" to 200f, "dt" to 200f, "an" to 0f, "hz" to 120f, "hp" to 0f)
+        Level.BAJA to mapOf("ptr" to -3f, "lp" to 500f, "dt" to 300f, "an" to 1f, "hz" to 60f, "hp" to 2f, "fr" to 1.5f, "sv" to 0.75f),
+        Level.MEDIA to mapOf("ptr" to -2f, "lp" to 300f, "dt" to 250f, "an" to 0.5f, "hz" to 90f, "hp" to 1f, "fr" to 1f, "sv" to 1f),
+        Level.MAX to mapOf("ptr" to -1f, "lp" to 200f, "dt" to 200f, "an" to 0f, "hz" to 120f, "hp" to 0f, "fr" to 0.5f, "sv" to 1.5f)
     )
 }
 
