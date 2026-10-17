@@ -24,6 +24,7 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -62,6 +63,10 @@ class OverlayService : Service() {
     private lateinit var subTv: TextView
     private lateinit var pill: View
     private lateinit var status: TextView
+    private lateinit var applyBtn: TextView
+    private lateinit var logoView: ImageView
+    private var spin: ValueAnimator? = null
+    private var applying = false
     private lateinit var collapseBtn: TextView
     private val levelTvs = mutableListOf<TextView>()
     private val counts = mutableMapOf<Level, Int>()
@@ -189,13 +194,13 @@ class OverlayService : Service() {
         val minBtn = btn("−", 26) { minimize() }.apply {
             (layoutParams as LinearLayout.LayoutParams).leftMargin = dp(5)
         }
-        val logo = ImageView(this).apply {
+        logoView = ImageView(this).apply {
             setImageResource(R.drawable.logo_emblem)
             scaleType = ImageView.ScaleType.CENTER_CROP
             layoutParams = lp(dp(26), dp(26)).apply { rightMargin = dp(8) }
             circle(this)
         }
-        header.addView(logo)
+        header.addView(logoView)
         header.addView(dot)
         header.addView(tv("Sensibilidad ", 12f, C_INK, true))
         header.addView(nameTv)
@@ -231,6 +236,14 @@ class OverlayService : Service() {
         trio.addView(pill)
         trio.addView(rowBtns)
         panel.addView(trio)
+
+        applyBtn = tv("APLICAR", 12f, C_DARK, true).apply {
+            gravity = Gravity.CENTER
+            background = shape(lvl.color, 12)
+            layoutParams = lp(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)).apply { topMargin = dp(8) }
+            setOnClickListener { applyNow() }
+        }
+        panel.addView(applyBtn)
 
         status = tv("", 11f, C_MUT).apply {
             alpha = 0f
@@ -314,8 +327,7 @@ class OverlayService : Service() {
             out.animate().scaleX(1.3f).scaleY(1.3f).setDuration(220).withEndAction {
                 out.animate().scaleX(1f).scaleY(1f).setDuration(320).start()
             }.start()
-            h.removeCallbacks(applyRun)
-            h.postDelayed(applyRun, 450)
+            flash("Valor cambiado. Pulsa Aplicar")
         }
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -375,12 +387,40 @@ class OverlayService : Service() {
         store.level = l
         refreshLevel(true)
         refreshers.forEach { it() }
+        flash("Seleccionado: ${l.label}. Pulsa Aplicar")
+    }
+
+    private fun applyNow() {
+        if (applying) return
+        applying = true
+        val l = store.level
+        applyBtn.text = "APLICANDO…"
         flash("Aplicando… 0%")
+        spin?.cancel()
+        spin = ValueAnimator.ofFloat(0f, 360f).apply {
+            duration = 900
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener { logoView.rotation = it.animatedValue as Float }
+            start()
+        }
         Thread {
             val r = Applier.apply(this, l, true) { f, t ->
-                h.post { status.animate().cancel(); status.alpha = 1f; status.text = "$t ${(f * 100).toInt()}%" }
+                h.post {
+                    status.animate().cancel()
+                    status.alpha = 1f
+                    status.text = "$t ${(f * 100).toInt()}%"
+                    applyBtn.alpha = 0.55f + 0.45f * f
+                }
             }
-            h.post { flash(if (r.failed == 0) "Listo: ${r.ok} comandos aplicados" else "Listo: ${r.ok} de ${r.ok + r.failed} comandos") }
+            h.post {
+                spin?.cancel()
+                logoView.rotation = 0f
+                applyBtn.text = "APLICAR"
+                applyBtn.alpha = 1f
+                applying = false
+                flash(if (r.failed == 0) "Listo: ${r.ok} comandos aplicados" else "Listo: ${r.ok} de ${r.ok + r.failed} comandos")
+            }
         }.start()
     }
 
@@ -392,6 +432,7 @@ class OverlayService : Service() {
         bubbleBg.setStroke(dp(3), l.color)
         subTv.text = "Valores de ${l.label}"
         (pill.background as GradientDrawable).setColor(l.color)
+        (applyBtn.background as GradientDrawable).setColor(l.color)
         val tx = (segW * l.ordinal).toFloat()
         if (animate) pill.animate().translationX(tx).setDuration(650).setInterpolator(OvershootInterpolator(1.3f)).start()
         else pill.translationX = tx

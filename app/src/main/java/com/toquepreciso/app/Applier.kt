@@ -153,11 +153,13 @@ object Applier {
     private val RATE = Regex("(touch|input|pointer|gesture)_([a-z_]*_)?(rate|sampling|polling|boost|response)|sampling_rate|polling_rate")
     private val HAPTIC = Regex("haptic|touch_vibrat|tap_vibrat")
     private val EXCL = Regex("enable|enabled|mode|state|count|_id|version|timestamp|last_|setup|user_|bluetooth|wifi|account")
-    private val VELOCITY = Regex("scroll_speed|scroll_velocity|fling|velocity|swipe|scroll_scale|scroll_multiplier|touch_speed|drag_speed|acceleration|pointer_(scale|sens[a-z_]*)")
+    private val ACCEL = Regex("acceleration|accel_|per_pixel|pixel|px_")
+    private val VELOCITY = Regex("scroll_speed|scroll_velocity|fling|velocity|swipe|scroll_scale|scroll_multiplier|touch_speed|drag_speed|pointer_(scale|sens[a-z_]*)")
 
     // Devuelve el control (fr, sv, th o ra) que gobierna una clave, o null si no es de ninguna familia.
     private fun factorKey(k: String): String? = when {
         FRICTION.containsMatchIn(k) -> "fr"
+        ACCEL.containsMatchIn(k) && !EXCL.containsMatchIn(k) -> "ac"
         VELOCITY.containsMatchIn(k) -> "sv"
         THRESH.containsMatchIn(k) && !EXCL.containsMatchIn(k) -> "th"
         RATE.containsMatchIn(k) && !EXCL.containsMatchIn(k) -> "ra"
@@ -303,6 +305,7 @@ object Applier {
         val plan = buildPlan(ctx, s, level)
         val (ok, failed) = execute(ctx, s, plan, onProgress)
         val bad = failed.size
+        s.appliedLevel = level
         Trace.log("Resultado: $ok bien, $bad fallaron" + if (failed.isEmpty()) "" else " -> " + failed.joinToString(", "))
         if (notify) {
             if (bad == 0) Notif.applied(ctx, "Sensibilidad ${level.label.lowercase()} aplicada", "$ok ajustes se aplicaron correctamente.")

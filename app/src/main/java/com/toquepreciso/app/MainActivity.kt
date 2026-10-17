@@ -12,6 +12,7 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -72,13 +73,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -169,6 +173,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
     var phase by remember { mutableStateOf("") }
     var done by remember { mutableStateOf<Applier.ApplyResult?>(null) }
     var loadLevel by remember { mutableStateOf(Level.MEDIA) }
+    val appliedLevel = remember(tick, local, done) { store.appliedLevel }
 
     val canSys = remember(tick, local) { Perms.canWriteSystem(ctx) }
     val canSec = remember(tick, local) { Perms.canWriteSecure(ctx) }
@@ -219,7 +224,6 @@ fun App(tick: Int, askNotif: () -> Unit) {
     fun choose(l: Level) {
         level = l
         store.level = l
-        runApply(l)
     }
 
     fun applyWithAnimation() {
@@ -296,7 +300,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
         }
 
         // Sensibilidad
-        Level.values().forEach { l -> LevelCard(l, l == level, counts[l]) { choose(l) } }
+        Level.values().forEach { l -> LevelCard(l, l == level, counts[l], if (appliedLevel == l) "ACTIVO" else if (l == level) "SELECCIONADO, FALTA APLICAR" else null) { choose(l) } }
 
         // Permisos
         SectionTitle("Permisos")
@@ -393,18 +397,36 @@ fun App(tick: Int, askNotif: () -> Unit) {
         }
         GhostButton("Escanear de nuevo") { scanKey++ }
 
-        SectionTitle("Registro (ADB: adb logcat -s AuxilioDeMira)")
-        val logLines = remember(msg, scanRes, local) { Trace.lines().takeLast(40) }
-        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CARD).padding(10.dp)) {
-            Text(
-                if (logLines.isEmpty()) "Sin registros todavía" else logLines.joinToString("\n"),
-                color = MUT, fontSize = 10.sp, fontFamily = FontFamily.Monospace
-            )
+        var logOpen by remember { mutableStateOf(false) }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(CARD)
+                .border(1.dp, LINE, RoundedCornerShape(12.dp))
+                .clickable { logOpen = !logOpen }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("REGISTRO (ADB)", color = MUT, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp, modifier = Modifier.weight(1f))
+            Text(if (logOpen) "Ocultar" else "Ver", color = OKC, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
-        GhostButton("Copiar registro") {
-            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("registro", Trace.text()))
-            msg = "Registro copiado."
+        AnimatedVisibility(logOpen) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("adb logcat -s AuxilioDeMira", color = MUT, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                val logLines = remember(msg, scanRes, local, done) { Trace.lines().takeLast(25) }
+                Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CARD).padding(10.dp)) {
+                    Text(
+                        if (logLines.isEmpty()) "Sin registros todavía" else logLines.joinToString("\n"),
+                        color = MUT, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                }
+                GhostButton("Copiar registro") {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("registro", Trace.text()))
+                    msg = "Registro copiado."
+                }
+            }
         }
 
         if (msg.isNotEmpty()) Text(msg, color = MUT, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
@@ -429,7 +451,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             Text(
-                "APLICAR SENSIBILIDAD ${level.label.uppercase()}",
+                (if (appliedLevel == level) "VOLVER A APLICAR " else "APLICAR SENSIBILIDAD ") + level.label.uppercase(),
                 color = DARK, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 1.sp
             )
         }
@@ -525,7 +547,7 @@ private fun PulseDot(active: Boolean) {
 }
 
 @Composable
-private fun LevelCard(l: Level, selected: Boolean, count: Int?, onClick: () -> Unit) {
+private fun LevelCard(l: Level, selected: Boolean, count: Int?, tag: String?, onClick: () -> Unit) {
     val c = Color(l.color)
     val border by animateColorAsState(if (selected) c else LINE, tween(450), label = "border")
     val scale by animateFloatAsState(
@@ -554,6 +576,7 @@ private fun LevelCard(l: Level, selected: Boolean, count: Int?, onClick: () -> U
         Column(Modifier.weight(1f)) {
             Text(l.label.uppercase(), color = INK, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, letterSpacing = 1.sp)
             Text(l.desc, color = MUT, fontSize = 12.sp)
+            if (tag != null) Text(tag, color = c, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(count?.toString() ?: "…", color = c, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
@@ -610,27 +633,58 @@ private fun GhostChip(text: String, onClick: () -> Unit) {
 private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.ApplyResult?, onClose: () -> Unit) {
     val c = Color(l.color)
     val p by animateFloatAsState(prog, tween(300), label = "prog")
+    val t = rememberInfiniteTransition(label = "load")
+    val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "spin")
+    val pulse by t.animateFloat(0.92f, 1.08f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulse")
+    val dots by t.animateFloat(0f, 4f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "dots")
+    val pop by animateFloatAsState(
+        if (done != null) 1f else 0f,
+        spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessLow), label = "pop"
+    )
+    val phases = listOf("Preparando", "Aplicando comandos", "Reintentando por Shizuku", "Verificando")
+    val idx = if (done != null) phases.size else phases.indexOf(phase).coerceAtLeast(0)
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0xE60B0F1D))
+            .background(Color(0xEE030712))
             .pointerInput(Unit) { detectTapGestures { } },
         contentAlignment = Alignment.Center
     ) {
         Column(
             Modifier
                 .padding(32.dp)
-                .clip(RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(24.dp))
                 .background(CARD)
-                .border(1.dp, LINE, RoundedCornerShape(20.dp))
+                .border(1.dp, if (done == null) LINE else c, RoundedCornerShape(24.dp))
+                .hud(c)
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize().rotate(if (done == null) spin else 0f)) {
+                    val sw = 6.dp.toPx()
+                    if (done == null) {
+                        drawArc(
+                            brush = Brush.sweepGradient(listOf(Color.Transparent, c)),
+                            startAngle = 0f, sweepAngle = 280f, useCenter = false,
+                            topLeft = Offset(sw / 2, sw / 2), size = Size(size.width - sw, size.height - sw),
+                            style = Stroke(sw, cap = StrokeCap.Round)
+                        )
+                    } else {
+                        drawCircle(c, radius = (size.minDimension - sw) / 2f, style = Stroke(sw))
+                    }
+                }
+                Image(
+                    painterResource(R.drawable.logo_emblem), null,
+                    Modifier.size(92.dp).scale(if (done == null) pulse else 0.9f + 0.1f * pop).clip(CircleShape)
+                )
+            }
+            Spacer(Modifier.height(18.dp))
             Text(
                 if (done == null) "Aplicando sensibilidad ${l.label.lowercase()}" else "Sensibilidad ${l.label.lowercase()} aplicada",
                 color = INK, fontWeight = FontWeight.Bold, fontSize = 16.sp
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
             LinearProgressIndicator(
                 progress = { p },
                 modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
@@ -638,8 +692,19 @@ private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.Ap
                 trackColor = LINE
             )
             Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                phases.forEachIndexed { i, _ ->
+                    val col by animateColorAsState(
+                        if (i < idx) c else if (i == idx) c.copy(alpha = 0.45f) else LINE,
+                        tween(400), label = "step$i"
+                    )
+                    Box(Modifier.weight(1f).height(4.dp).clip(RoundedCornerShape(2.dp)).background(col))
+                }
+            }
+            Spacer(Modifier.height(10.dp))
             Text(
-                if (done == null) "$phase ${(p * 100).toInt()}%" else "${done.ok} de ${done.ok + done.failed} comandos conservados",
+                if (done == null) phase + ".".repeat(dots.toInt().coerceIn(0, 3)) + " " + (p * 100).toInt() + "%"
+                else "${done.ok} de ${done.ok + done.failed} comandos conservados",
                 color = MUT, fontSize = 13.sp
             )
             if (done != null) {

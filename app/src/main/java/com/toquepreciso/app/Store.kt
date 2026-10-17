@@ -28,13 +28,14 @@ object Knobs {
         Knob("hp", "Vibración al tocar", 0f, 2f, 1f) { v -> listOf("Apagada", "Suave", "Fuerte")[v.toInt()] },
         Knob("fr", "Fricción de deslizamiento", 0.5f, 2f, 0.25f) { v -> "${v}x" },
         Knob("sv", "Velocidad de desplazamiento", 0.5f, 2f, 0.25f) { v -> "${v}x" },
-        Knob("th", "Umbral y respuesta", 0.5f, 2f, 0.25f) { v -> "${v}x" }
+        Knob("th", "Umbral y respuesta", 0.5f, 2f, 0.25f) { v -> "${v}x" },
+        Knob("ac", "Aceleración por píxel", 0.5f, 3f, 0.25f) { v -> "${v}x" }
     )
 
     val defaults: Map<Level, Map<String, Float>> = mapOf(
-        Level.BAJA to mapOf("ptr" to -3f, "lp" to 500f, "dt" to 300f, "an" to 1f, "hz" to 60f, "hp" to 2f, "fr" to 1.5f, "sv" to 0.75f, "th" to 1.25f),
-        Level.MEDIA to mapOf("ptr" to -2f, "lp" to 300f, "dt" to 250f, "an" to 0.5f, "hz" to 90f, "hp" to 1f, "fr" to 1f, "sv" to 1f, "th" to 1f),
-        Level.MAX to mapOf("ptr" to -1f, "lp" to 200f, "dt" to 200f, "an" to 0f, "hz" to 120f, "hp" to 0f, "fr" to 0.5f, "sv" to 1.5f, "th" to 0.75f)
+        Level.BAJA to mapOf("ptr" to -3f, "lp" to 500f, "dt" to 300f, "an" to 1f, "hz" to 60f, "hp" to 2f, "fr" to 1.5f, "sv" to 0.75f, "th" to 1.25f, "ac" to 0.75f),
+        Level.MEDIA to mapOf("ptr" to -2f, "lp" to 300f, "dt" to 250f, "an" to 0.5f, "hz" to 90f, "hp" to 1f, "fr" to 1f, "sv" to 1f, "th" to 1f, "ac" to 1f),
+        Level.MAX to mapOf("ptr" to -1f, "lp" to 200f, "dt" to 200f, "an" to 0f, "hz" to 120f, "hp" to 0f, "fr" to 0.5f, "sv" to 1.5f, "th" to 0.75f, "ac" to 2f)
     )
 }
 
@@ -51,6 +52,10 @@ class Store(ctx: Context) {
     var level: Level
         get() = runCatching { Level.valueOf(p.getString("level", "MEDIA")!!) }.getOrDefault(Level.MEDIA)
         set(v) { p.edit().putString("level", v.name).apply() }
+
+    var appliedLevel: Level?
+        get() = p.getString("applied", null)?.let { n -> runCatching { Level.valueOf(n) }.getOrNull() }
+        set(v) { p.edit().putString("applied", v?.name).apply() }
 
     fun value(l: Level, k: Knob): Float =
         p.getFloat("v_${l.name}_${k.id}", Knobs.defaults[l]!![k.id]!!)
