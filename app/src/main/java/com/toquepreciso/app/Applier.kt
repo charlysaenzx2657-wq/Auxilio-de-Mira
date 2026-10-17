@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
+import kotlin.math.abs
 
 object Applier {
     const val SYS = "system"
@@ -55,7 +56,10 @@ object Applier {
             SEC -> Settings.Secure.putString(ctx.contentResolver, key, value)
             else -> Settings.Global.putString(ctx.contentResolver, key, value)
         }
-    } catch (e: Exception) { false }
+    } catch (e: Exception) {
+        Trace.err("settings put $t $key $value lanzó ${e.javaClass.simpleName}: ${e.message}")
+        false
+    }
 
     // Guarda el valor original la primera vez que se toca una clave.
     private fun remember(ctx: Context, s: Store, t: String, key: String) {
@@ -67,9 +71,22 @@ object Applier {
         }
     }
 
+    // Escribe, vuelve a leer el valor y deja todo en el registro (ADB y app).
     private fun set(ctx: Context, s: Store, t: String, key: String, value: String): Boolean {
         remember(ctx, s, t, key)
-        return rawPut(ctx, t, key, value)
+        val before = get(ctx, t, key)
+        val wrote = rawPut(ctx, t, key, value)
+        val after = get(ctx, t, key)
+        val a = after?.toFloatOrNull()
+        val b = value.toFloatOrNull()
+        val same = after != null && (after == value || (a != null && b != null && abs(a - b) < 0.0001f))
+        val st = when {
+            !wrote -> "FALLÓ"
+            same -> "OK"
+            else -> "IGNORADO (el sistema no lo conservó)"
+        }
+        Trace.log("settings put $t $key $value | antes=$before después=$after | $st")
+        return wrote && same
     }
 
     private fun restoreKey(ctx: Context, s: Store, t: String, key: String): Boolean {
@@ -111,7 +128,14 @@ object Applier {
         val total = maps.values.sumOf { it.size }
         val known = KNOWN.count { (t, k) -> maps[t]?.containsKey(k) == true }
         val oem = oemFrom(maps)
-        return ScanResult(total, known + oem.size, oem)
+        Trace.log("=== ESCANEO: $total ajustes en el sistema ===")
+        var n = 0
+        for ((t, m) in maps) for ((k, v) in m) {
+            if (CATALOG.containsMatchIn(k) && n < 400) { n++; Trace.log("candidato $t:$k=$v") }
+        }
+        val extra = maps.flatMap { (t, m) -> m.keys.filter { FRICTION.containsMatchIn(it) || VELOCITY.containsMatchIn(it) }.map { t to it } }
+        Trace.log("Conocidos: $known, del fabricante: ${oem.size}, fricción/velocidad: ${extra.size}, candidatos listados: $n")
+        return ScanResult(total, known + oem.size + extra.size, oem)
     }
 
     private fun supportedRate(ctx: Context, want: Float): Float {
@@ -121,12 +145,35 @@ object Applier {
         return rates.filter { it <= want + 1f }.maxOrNull() ?: rates.min()
     }
 
+    private val FRICTION = Regex("friction")
+    private val VELOCITY = Regex("scroll_speed|scroll_velocity|fling_velocity|max_fling|min_fling")
+    private val CATALOG = Regex("touch|scroll|fling|friction|gesture|pointer|tap_|press|slop|velocity|sensitiv|haptic|vibrat")
+
+    // Multiplica por un factor las claves numéricas que coincidan, tomando como base el valor original.
+    private fun scaleKeys(ctx: Context, s: Store, re: Regex, factor: Float, name: String): List<Triple<String, String, String>> {
+        val out = mutableListOf<Triple<String, String, String>>()
+        for (t in listOf(SYS, SEC, GLB)) for ((k, v) in readAll(ctx, t)) {
+            if (!re.containsMatchIn(k) || v == null) continue
+            remember(ctx, s, t, k)
+            val orig = s.backup().optString("$t:$k", v)
+            val base = orig.toFloatOrNull() ?: continue
+            if (orig == "0" || orig == "1") continue
+            val nv = base * factor
+            out += Triple(t, k, if (orig.contains('.')) String.format(java.util.Locale.US, "%.5f", nv) else nv.toInt().toString())
+        }
+        if (out.isEmpty()) Trace.log("$name: sin claves compatibles en este teléfono")
+        else Trace.log("$name: ${out.size} claves -> " + out.joinToString { it.second })
+        return out
+    }
+
     fun apply(ctx: Context, level: Level, notify: Boolean): ApplyResult {
         val s = Store(ctx)
+        Trace.log("=== APLICAR nivel ${level.label} ===")
         fun v(id: String) = s.value(level, Knobs.all.first { it.id == id })
         var ok = 0
         var bad = 0
-        fun put(t: String, k: String, x: String) { if (set(ctx, s, t, k, x)) ok++ else bad++ }
+        val failed = mutableListOf<String>()
+        fun put(t: String, k: String, x: String) { if (set(ctx, s, t, k, x)) ok++ else { bad++; failed += "$t $k" } }
 
         put(SYS, "pointer_speed", v("ptr").toInt().toString())
         put(SEC, "long_press_timeout", v("lp").toInt().toString())
@@ -144,6 +191,9 @@ object Applier {
         put(SYS, "haptic_feedback_enabled", if (hp == 0) "0" else "1")
         put(SYS, "haptic_feedback_intensity", listOf("0", "1", "3")[hp])
         oemKeys(ctx).forEach { (t, k) -> put(t, k, if (level == Level.BAJA) "0" else "1") }
+        scaleKeys(ctx, s, FRICTION, v("fr"), "fricción").forEach { (t, k, x) -> put(t, k, x) }
+        scaleKeys(ctx, s, VELOCITY, v("sv"), "velocidad").forEach { (t, k, x) -> put(t, k, x) }
+        Trace.log("Resultado: $ok bien, $bad fallaron" + if (failed.isEmpty()) "" else " -> " + failed.joinToString(", "))
 
         if (notify) {
             if (bad == 0) Notif.applied(ctx, "Sensibilidad ${level.label.lowercase()} aplicada", "$ok ajustes se aplicaron correctamente.")
