@@ -28,6 +28,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -152,6 +154,10 @@ fun App(tick: Int, askNotif: () -> Unit) {
         mutableStateMapOf<String, Boolean>().also { m -> EXTRAS.forEach { m[it.first] = store.extra(it.first) } }
     }
     var shown by remember { mutableStateOf(false) }
+    var cands by remember { mutableStateOf<List<Applier.Cand>>(emptyList()) }
+    var cat by remember { mutableStateOf("Fricción") }
+    var limit by remember { mutableIntStateOf(30) }
+    val picked = remember { mutableStateListOf<String>().also { it.addAll(store.picked()) } }
 
     val canSys = remember(tick, local) { Perms.canWriteSystem(ctx) }
     val canSec = remember(tick, local) { Perms.canWriteSecure(ctx) }
@@ -169,6 +175,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
         val r = withContext(Dispatchers.IO) { Applier.scan(ctx) }
         job.join()
         scanRes = r
+        cands = withContext(Dispatchers.IO) { Applier.candidates(ctx) }
     }
 
     fun report(r: Applier.ApplyResult, l: Level) {
@@ -347,6 +354,53 @@ fun App(tick: Int, askNotif: () -> Unit) {
         }
         GhostButton("Escanear de nuevo") { scanKey++ }
 
+        SectionTitle("Ajustes candidatos (fricción y velocidad)")
+        Text("Elige cuáles multiplican los botones. La lista Otros es solo para ver.", color = MUT, fontSize = 11.sp)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Fricción", "Velocidad", "Otros").forEach { c ->
+                val n = cands.count { it.cat == c }
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (cat == c) OKC else CARD)
+                        .clickable { cat = c; limit = 30 }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) { Text("$c ($n)", color = if (cat == c) DARK else INK, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+            }
+        }
+        val shownCands = cands.filter { it.cat == cat }
+        if (cat != "Otros") Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GhostChip("Elegir todas") {
+                shownCands.forEach { if (it.id !in picked) picked.add(it.id) }
+                store.setPicked(picked.toSet())
+            }
+            GhostChip("Ninguna") {
+                picked.removeAll(shownCands.map { it.id }.toSet())
+                store.setPicked(picked.toSet())
+            }
+        }
+        shownCands.take(limit).forEach { c ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CARD).padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(c.k, color = INK, fontSize = 12.sp)
+                    Text("${c.t} = ${c.v}", color = MUT, fontSize = 10.sp)
+                }
+                if (cat != "Otros") Switch(
+                    checked = c.id in picked,
+                    onCheckedChange = { on ->
+                        if (on) picked.add(c.id) else picked.remove(c.id)
+                        store.setPicked(picked.toSet())
+                    },
+                    colors = SwitchDefaults.colors(checkedTrackColor = OKC, checkedThumbColor = Color.White)
+                )
+            }
+        }
+        if (shownCands.size > limit) GhostButton("Mostrar 30 más (${shownCands.size - limit} restantes)") { limit += 30 }
+        if (cands.isEmpty()) Text("Sin candidatas todavía: espera a que termine el escaneo.", color = MUT, fontSize = 11.sp)
+
         SectionTitle("Registro (ADB: adb logcat -s AuxilioDeMira)")
         val logLines = remember(msg, scanRes, local) { Trace.lines().takeLast(40) }
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CARD).padding(10.dp)) {
@@ -434,4 +488,16 @@ private fun GhostButton(text: String, onClick: () -> Unit) {
             .padding(14.dp),
         contentAlignment = Alignment.Center
     ) { Text(text, color = INK, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+}
+
+@Composable
+private fun GhostChip(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(CARD)
+            .border(1.dp, LINE, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) { Text(text, color = INK, fontSize = 12.sp) }
 }
