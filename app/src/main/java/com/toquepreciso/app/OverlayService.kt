@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -20,10 +21,12 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
@@ -36,12 +39,12 @@ class OverlayService : Service() {
         const val STOP = "com.toquepreciso.app.STOP"
     }
 
-    private val C_BG = 0xFF12182C.toInt()
-    private val C_CARD = 0xFF1C2542.toInt()
-    private val C_LINE = 0xFF2C3760.toInt()
-    private val C_INK = 0xFFEEF2FF.toInt()
-    private val C_MUT = 0xFF93A0C8.toInt()
-    private val C_DARK = 0xFF0B0F1D.toInt()
+    private val C_BG = 0xFF050A14.toInt()
+    private val C_CARD = 0xFF0B1426.toInt()
+    private val C_LINE = 0xFF17325C.toInt()
+    private val C_INK = 0xFFEAF6FF.toInt()
+    private val C_MUT = 0xFF7F9BC4.toInt()
+    private val C_DARK = 0xFF030712.toInt()
 
     private lateinit var wm: WindowManager
     private lateinit var store: Store
@@ -49,7 +52,8 @@ class OverlayService : Service() {
     private var built = false
 
     private lateinit var panel: LinearLayout
-    private lateinit var bubble: TextView
+    private lateinit var bubble: FrameLayout
+    private lateinit var bubbleBg: GradientDrawable
     private lateinit var plp: WindowManager.LayoutParams
     private lateinit var blp: WindowManager.LayoutParams
     private lateinit var vals: LinearLayout
@@ -144,7 +148,16 @@ class OverlayService : Service() {
 
     private fun lp(w: Int, hh: Int, weight: Float = 0f) = LinearLayout.LayoutParams(w, hh, weight)
 
-    private fun panelBg() = shape(Color.argb((store.opacity / 100f * 255).toInt(), 18, 24, 44), 18)
+    private fun circle(v: View) {
+        v.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setOval(0, 0, view.width, view.height)
+            }
+        }
+        v.clipToOutline = true
+    }
+
+    private fun panelBg() = shape(Color.argb((store.opacity / 100f * 255).toInt(), 5, 10, 20), 18).apply { setStroke(dp(1), 0x8019C8FF.toInt()) }
 
     // ---------- construcción ----------
     private fun build() {
@@ -176,6 +189,13 @@ class OverlayService : Service() {
         val minBtn = btn("−", 26) { minimize() }.apply {
             (layoutParams as LinearLayout.LayoutParams).leftMargin = dp(5)
         }
+        val logo = ImageView(this).apply {
+            setImageResource(R.drawable.logo_emblem)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            layoutParams = lp(dp(26), dp(26)).apply { rightMargin = dp(8) }
+            circle(this)
+        }
+        header.addView(logo)
         header.addView(dot)
         header.addView(tv("Sensibilidad ", 12f, C_INK, true))
         header.addView(nameTv)
@@ -231,10 +251,20 @@ class OverlayService : Service() {
         vals.addView(snapRow())
         panel.addView(vals)
 
-        bubble = tv(lvl.label.take(1), 18f, C_DARK, true).apply {
-            gravity = Gravity.CENTER
-            background = oval(lvl.color)
+        bubbleBg = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(C_BG)
+            setStroke(dp(3), lvl.color)
+        }
+        bubble = FrameLayout(this).apply {
+            background = bubbleBg
+            setPadding(dp(4), dp(4), dp(4), dp(4))
             visibility = View.GONE
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.logo_emblem)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                circle(this)
+            })
         }
 
         val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -326,7 +356,7 @@ class OverlayService : Service() {
         }
         fun paint() {
             t.text = if (store.snap) "Sí" else "No"
-            t.background = shape(if (store.snap) 0xFF18B8A6.toInt() else C_LINE, 12)
+            t.background = shape(if (store.snap) 0xFF19C8FF.toInt() else C_LINE, 12)
             t.setTextColor(if (store.snap) C_DARK else C_INK)
         }
         paint()
@@ -359,8 +389,7 @@ class OverlayService : Service() {
         nameTv.text = l.label
         nameTv.setTextColor(l.color)
         (dot.background as GradientDrawable).setColor(l.color)
-        (bubble.background as GradientDrawable).setColor(l.color)
-        bubble.text = l.label.take(1)
+        bubbleBg.setStroke(dp(3), l.color)
         subTv.text = "Valores de ${l.label}"
         (pill.background as GradientDrawable).setColor(l.color)
         val tx = (segW * l.ordinal).toFloat()

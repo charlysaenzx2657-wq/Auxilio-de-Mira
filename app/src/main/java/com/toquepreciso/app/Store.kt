@@ -4,8 +4,8 @@ import android.content.Context
 import org.json.JSONObject
 
 enum class Level(val label: String, val desc: String, val color: Int) {
-    BAJA("Baja", "Más control, giro lento", 0xFF5B8DEF.toInt()),
-    MEDIA("Media", "Equilibrio entre calibrado y preciso", 0xFF18B8A6.toInt()),
+    BAJA("Baja", "Más control, giro lento", 0xFF3B82F6.toInt()),
+    MEDIA("Media", "Equilibrio entre calibrado y preciso", 0xFF19C8FF.toInt()),
     MAX("Máxima", "Deslizamiento muy rápido", 0xFFFF7A1A.toInt())
 }
 

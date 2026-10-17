@@ -25,6 +25,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -71,11 +73,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -87,13 +93,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
-private val BG = Color(0xFF12182C)
-private val CARD = Color(0xFF1C2542)
-private val LINE = Color(0xFF2C3760)
-private val INK = Color(0xFFEEF2FF)
-private val MUT = Color(0xFF93A0C8)
-private val DARK = Color(0xFF0B0F1D)
-private val OKC = Color(0xFF18B8A6)
+private val BG = Color(0xFF050A14)
+private val CARD = Color(0xFF0B1426)
+private val LINE = Color(0xFF17325C)
+private val INK = Color(0xFFEAF6FF)
+private val MUT = Color(0xFF7F9BC4)
+private val DARK = Color(0xFF030712)
+private val OKC = Color(0xFF19C8FF)
 private val BAD = Color(0xFFFF6B5B)
 private val ORANGE = Color(0xFFFF7A1A)
 
@@ -220,7 +226,19 @@ fun App(tick: Int, askNotif: () -> Unit) {
         runApply(level)
     }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(BG, Color(0xFF07142B), BG)))
+            .drawBehind {
+                val c = Offset(size.width / 2f, 0f)
+                drawCircle(
+                    brush = Brush.radialGradient(listOf(Color(0x3319C8FF), Color.Transparent), center = c, radius = size.width * 0.9f),
+                    radius = size.width * 0.9f,
+                    center = c
+                )
+            }
+    ) {
     Column(
         Modifier
             .fillMaxSize()
@@ -229,9 +247,25 @@ fun App(tick: Int, askNotif: () -> Unit) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Auxilio de Mira", color = INK, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text("Free Fire", color = MUT, fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                painterResource(R.drawable.logo_emblem), null,
+                Modifier
+                    .size(60.dp)
+                    .clip(CircleShape)
+                    .border(2.dp, Brush.sweepGradient(listOf(OKC, Color(0xFF2A6BFF), OKC)), CircleShape)
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text("AUXILIO DE MIRA", color = INK, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.5.sp)
+                Text("Ajuste fino de toque para Free Fire", color = MUT, fontSize = 12.sp)
+            }
+            StatusChip(if (shzUp) "Shizuku" else "Sin Shizuku", shzUp)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile("Ajustes del sistema", scanRes?.total?.toString() ?: "…", Modifier.weight(1f))
+            StatTile("Compatibles", scanRes?.supported?.toString() ?: "…", Modifier.weight(1f))
+            StatTile("Por botón", if (plan > 0) plan.toString() else "…", Modifier.weight(1f))
         }
 
         // Escaneo
@@ -350,18 +384,6 @@ fun App(tick: Int, askNotif: () -> Unit) {
         }
 
         // Botones
-        val c = Color(level.color)
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(c.copy(alpha = 0.4f))
-                .drawBehind { drawRect(c, size = Size(size.width * fill.value, size.height)) }
-                .clickable { applyWithAnimation() }
-                .padding(14.dp),
-            contentAlignment = Alignment.Center
-        ) { Text("Aplicar sensibilidad", color = DARK, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
-
         GhostButton("Restaurar valores originales") {
             scope.launch {
                 val ok = withContext(Dispatchers.IO) { Applier.restoreAll(ctx) }
@@ -386,7 +408,31 @@ fun App(tick: Int, askNotif: () -> Unit) {
         }
 
         if (msg.isNotEmpty()) Text(msg, color = MUT, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(96.dp))
+    }
+    Box(
+        Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .background(Brush.verticalGradient(listOf(Color.Transparent, BG)))
+            .systemBarsPadding()
+            .padding(16.dp)
+    ) {
+        val c = Color(level.color)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.horizontalGradient(listOf(c, c.copy(alpha = 0.7f))))
+                .clickable { applyWithAnimation() }
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "APLICAR SENSIBILIDAD ${level.label.uppercase()}",
+                color = DARK, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 1.sp
+            )
+        }
     }
     if (loading) LoadingScreen(loadLevel, prog, phase, done) { loading = false }
     }
@@ -394,7 +440,77 @@ fun App(tick: Int, askNotif: () -> Unit) {
 
 @Composable
 private fun SectionTitle(t: String) {
-    Text(t, color = MUT, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(width = 3.dp, height = 14.dp).background(OKC))
+        Spacer(Modifier.width(8.dp))
+        Text(t.uppercase(), color = MUT, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f).height(1.dp).background(Brush.horizontalGradient(listOf(LINE, Color.Transparent))))
+    }
+}
+
+@Composable
+private fun StatusChip(text: String, ok: Boolean) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(CARD)
+            .border(1.dp, if (ok) OKC else BAD, RoundedCornerShape(20.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(7.dp).clip(CircleShape).background(if (ok) OKC else BAD))
+        Spacer(Modifier.width(6.dp))
+        Text(text, color = INK, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun StatTile(label: String, value: String, modifier: Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(CARD)
+            .border(1.dp, LINE, RoundedCornerShape(14.dp))
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(value, color = OKC, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+        Text(label, color = MUT, fontSize = 10.sp)
+    }
+}
+
+// Esquinas tipo HUD, como el marco del logo.
+private fun Modifier.hud(color: Color): Modifier = drawBehind {
+    val l = 14.dp.toPx()
+    val w = 2.dp.toPx()
+    val m = 6.dp.toPx()
+    val x2 = size.width - m
+    val y2 = size.height - m
+    drawLine(color, Offset(m, m), Offset(m + l, m), w)
+    drawLine(color, Offset(m, m), Offset(m, m + l), w)
+    drawLine(color, Offset(x2, m), Offset(x2 - l, m), w)
+    drawLine(color, Offset(x2, m), Offset(x2, m + l), w)
+    drawLine(color, Offset(m, y2), Offset(m + l, y2), w)
+    drawLine(color, Offset(m, y2), Offset(m, y2 - l), w)
+    drawLine(color, Offset(x2, y2), Offset(x2 - l, y2), w)
+    drawLine(color, Offset(x2, y2), Offset(x2, y2 - l), w)
+}
+
+@Composable
+private fun SignalBars(n: Int, c: Color) {
+    Canvas(Modifier.size(34.dp)) {
+        val bw = size.width / 5f
+        for (i in 0 until 3) {
+            val h = size.height * (0.4f + 0.3f * i)
+            drawRoundRect(
+                if (i < n) c else LINE,
+                topLeft = Offset(i * bw * 1.6f, size.height - h),
+                size = Size(bw, h),
+                cornerRadius = CornerRadius(3.dp.toPx())
+            )
+        }
+    }
 }
 
 @Composable
@@ -411,41 +527,56 @@ private fun PulseDot(active: Boolean) {
 @Composable
 private fun LevelCard(l: Level, selected: Boolean, count: Int?, onClick: () -> Unit) {
     val c = Color(l.color)
-    val border by animateColorAsState(if (selected) c else Color.Transparent, tween(450), label = "border")
+    val border by animateColorAsState(if (selected) c else LINE, tween(450), label = "border")
     val scale by animateFloatAsState(
         if (selected) 1.02f else 1f,
         spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessLow),
         label = "scale"
     )
-    val dotH by animateDpAsState(if (selected) 46.dp else 36.dp, tween(500), label = "dot")
-    val shape = RoundedCornerShape(16.dp)
+    val glow by rememberInfiniteTransition(label = "glow").animateFloat(
+        0.25f, 0.6f, infiniteRepeatable(tween(1600), RepeatMode.Reverse), label = "g"
+    )
+    val shape = RoundedCornerShape(18.dp)
     Row(
         Modifier
             .fillMaxWidth()
             .scale(scale)
             .clip(shape)
-            .background(if (selected) c.copy(alpha = 0.14f).compositeOver(CARD) else CARD)
-            .border(2.dp, border, shape)
+            .background(Brush.horizontalGradient(listOf(if (selected) c.copy(alpha = 0.22f) else CARD, CARD)))
+            .border(if (selected) 2.dp else 1.dp, border.copy(alpha = if (selected) 0.5f + glow * 0.5f else 1f), shape)
+            .hud(if (selected) c else LINE)
             .clickable(onClick = onClick)
-            .padding(14.dp),
+            .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.width(12.dp).height(dotH).clip(RoundedCornerShape(6.dp)).background(c))
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text(l.label, color = INK, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        SignalBars(l.ordinal + 1, c)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(l.label.uppercase(), color = INK, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, letterSpacing = 1.sp)
             Text(l.desc, color = MUT, fontSize = 12.sp)
-            if (count != null) Text("$count comandos disponibles", color = c, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(count?.toString() ?: "…", color = c, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
+            Text("comandos", color = MUT, fontSize = 10.sp)
         }
     }
 }
 
 @Composable
 private fun PermRow(label: String, ok: Boolean, action: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(if (ok) "✓" else "✗", color = if (ok) OKC else BAD, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp))
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(if (ok) OKC else BAD))
+        Spacer(Modifier.width(12.dp))
         Text(label, color = INK, fontSize = 13.sp, modifier = Modifier.weight(1f))
-        if (!ok) TextButton(onClick = onClick) { Text(action, color = ORANGE, fontSize = 12.sp) }
+        if (ok) Text("Activo", color = OKC, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        else Box(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(ORANGE.copy(alpha = 0.18f))
+                .border(1.dp, ORANGE, RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) { Text(action, color = ORANGE, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
     }
 }
 
