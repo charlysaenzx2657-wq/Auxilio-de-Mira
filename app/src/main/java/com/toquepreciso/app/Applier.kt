@@ -75,7 +75,12 @@ object Applier {
     private fun set(ctx: Context, s: Store, t: String, key: String, value: String): Boolean {
         remember(ctx, s, t, key)
         val before = get(ctx, t, key)
-        val wrote = rawPut(ctx, t, key, value)
+        var wrote = rawPut(ctx, t, key, value)
+        var via = ""
+        if (!wrote) {
+            wrote = Perms.shellPut(t, key, value)
+            if (wrote) via = " (vía Shizuku)"
+        }
         val after = get(ctx, t, key)
         val a = after?.toFloatOrNull()
         val b = value.toFloatOrNull()
@@ -85,7 +90,7 @@ object Applier {
             same -> "OK"
             else -> "IGNORADO (el sistema no lo conservó)"
         }
-        Trace.log("settings put $t $key $value | antes=$before después=$after | $st")
+        Trace.log("settings put $t $key $value | antes=$before después=$after | $st$via")
         return wrote && same
     }
 
@@ -94,9 +99,10 @@ object Applier {
         val id = "$t:$key"
         if (!b.has(id)) return true
         val v = if (b.isNull(id)) null else b.getString(id)
+        if (v != null && get(ctx, t, key) == v) { b.remove(id); s.saveBackup(b); return true }
         val ok = if (v == null) {
             try { ctx.contentResolver.delete(uriFor(t), "name=?", arrayOf(key)) >= 0 } catch (e: Exception) { false }
-        } else rawPut(ctx, t, key, v)
+        } else (rawPut(ctx, t, key, v) || Perms.shellPut(t, key, v))
         if (ok) { b.remove(id); s.saveBackup(b) }
         return ok
     }
@@ -145,15 +151,36 @@ object Applier {
         return rates.filter { it <= want + 1f }.maxOrNull() ?: rates.min()
     }
 
-    private val FRICTION = Regex("friction")
-    private val VELOCITY = Regex("scroll_speed|scroll_velocity|fling_velocity|max_fling|min_fling")
-    private val CATALOG = Regex("touch|scroll|fling|friction|gesture|pointer|tap_|press|slop|velocity|sensitiv|haptic|vibrat")
+    private val FRICTION = Regex("friction|damping|deceler|decay|inertia|overscroll")
+    private val VELOCITY = Regex("scroll_speed|scroll_velocity|fling|velocity|swipe|scroll_scale|scroll_multiplier|touch_speed|drag_speed")
+    private val CATALOG = Regex("touch|scroll|fling|friction|gesture|pointer|tap_|press|slop|velocity|sensitiv|haptic|vibrat|swipe|drag|damping|deceler|inertia|sampling|polling|palm|edge|finger|hover|double_tap|click|game")
 
-    // Multiplica por un factor las claves numéricas que coincidan, tomando como base el valor original.
+    data class Cand(val t: String, val k: String, val v: String?, val cat: String) {
+        val id: String get() = "$t:$k"
+    }
+
+    fun catOf(k: String): String = when {
+        FRICTION.containsMatchIn(k) -> "Fricción"
+        VELOCITY.containsMatchIn(k) -> "Velocidad"
+        else -> "Otros"
+    }
+
+    // Lista ampliada de candidatas (sin las que la app ya maneja por su cuenta).
+    fun candidates(ctx: Context): List<Cand> {
+        val known = KNOWN.map { "${it.first}:${it.second}" }.toSet()
+        val out = mutableListOf<Cand>()
+        for (t in listOf(SYS, SEC, GLB)) for ((k, v) in readAll(ctx, t)) {
+            if ("$t:$k" in known || !CATALOG.containsMatchIn(k)) continue
+            out += Cand(t, k, v, catOf(k))
+        }
+        return out.sortedWith(compareBy({ it.cat }, { it.k }, { it.t }))
+    }
+
+    // Multiplica por un factor las claves numéricas ELEGIDAS, tomando como base el valor original.
     private fun scaleKeys(ctx: Context, s: Store, re: Regex, factor: Float, name: String): List<Triple<String, String, String>> {
         val out = mutableListOf<Triple<String, String, String>>()
         for (t in listOf(SYS, SEC, GLB)) for ((k, v) in readAll(ctx, t)) {
-            if (!re.containsMatchIn(k) || v == null) continue
+            if (!re.containsMatchIn(k) || v == null || "$t:$k" !in s.picked() || (re === VELOCITY && FRICTION.containsMatchIn(k))) continue
             remember(ctx, s, t, k)
             val orig = s.backup().optString("$t:$k", v)
             val base = orig.toFloatOrNull() ?: continue
@@ -161,7 +188,7 @@ object Applier {
             val nv = base * factor
             out += Triple(t, k, if (orig.contains('.')) String.format(java.util.Locale.US, "%.5f", nv) else nv.toInt().toString())
         }
-        if (out.isEmpty()) Trace.log("$name: sin claves compatibles en este teléfono")
+        if (out.isEmpty()) Trace.log("$name: ninguna clave elegida (elígelas en la lista de candidatas)")
         else Trace.log("$name: ${out.size} claves -> " + out.joinToString { it.second })
         return out
     }
@@ -294,14 +321,24 @@ object Perms {
     } catch (e: Throwable) { false }
     fun shizukuAsk(code: Int) { try { Shizuku.requestPermission(code) } catch (e: Throwable) { } }
 
-    private fun sh(cmd: String): Boolean = try {
+    // Ejecuta un comando de terminal por Shizuku. Devuelve (código de salida, salida).
+    fun shOut(cmd: String): Pair<Int, String> = try {
         val m = Shizuku::class.java.getDeclaredMethod(
             "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
         )
         m.isAccessible = true
         val p = m.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
-        p.waitFor() == 0
-    } catch (e: Throwable) { false }
+        val out = p.inputStream.bufferedReader().readText() + p.errorStream.bufferedReader().readText()
+        p.waitFor() to out.trim()
+    } catch (e: Throwable) { -1 to "Shizuku no disponible: ${e.javaClass.simpleName}" }
+
+    private fun sh(cmd: String): Boolean = shOut(cmd).first == 0
+
+    fun shellPut(t: String, key: String, value: String): Boolean {
+        val (code, out) = shOut("settings put $t $key '$value'")
+        if (code != 0) Trace.err("terminal: settings put $t $key $value -> código $code $out")
+        return code == 0
+    }
 
     // Concede por Shizuku los permisos especiales que la app necesita.
     fun grantAll(ctx: Context): Boolean {
