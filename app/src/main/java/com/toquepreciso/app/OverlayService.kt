@@ -60,6 +60,8 @@ class OverlayService : Service() {
     private lateinit var status: TextView
     private lateinit var collapseBtn: TextView
     private val levelTvs = mutableListOf<TextView>()
+    private val counts = mutableMapOf<Level, Int>()
+    private fun labelFor(l: Level) = if (counts[l] == null) l.label else "${l.label}\n${counts[l]}"
     private val refreshers = mutableListOf<() -> Unit>()
     private var pulse: ValueAnimator? = null
     private var px = 0
@@ -189,16 +191,16 @@ class OverlayService : Service() {
             layoutParams = lp(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
         }
         pill = View(this).apply {
-            layoutParams = FrameLayout.LayoutParams(segW, dp(32))
+            layoutParams = FrameLayout.LayoutParams(segW, dp(40))
             background = shape(lvl.color, 10)
             translationX = (segW * lvl.ordinal).toFloat()
         }
         val rowBtns = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32))
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40))
         }
         Level.values().forEach { l ->
-            val t = tv(l.label, 12f, if (l == lvl) C_DARK else C_INK, true).apply {
+            val t = tv(labelFor(l), 11f, if (l == lvl) C_DARK else C_INK, true).apply {
                 gravity = Gravity.CENTER
                 layoutParams = lp(segW, ViewGroup.LayoutParams.MATCH_PARENT)
                 setOnClickListener { select(l) }
@@ -248,6 +250,13 @@ class OverlayService : Service() {
 
         makeDraggable(header, null)
         makeDraggable(bubble) { restoreFromBubble() }
+        Thread {
+            val m = Level.values().associateWith { Applier.planSize(this, it) }
+            h.post {
+                counts.putAll(m)
+                Level.values().forEachIndexed { i, l -> levelTvs[i].text = labelFor(l) }
+            }
+        }.start()
 
         // entrada animada
         panel.alpha = 0f
@@ -336,10 +345,12 @@ class OverlayService : Service() {
         store.level = l
         refreshLevel(true)
         refreshers.forEach { it() }
-        flash("Aplicando…")
+        flash("Aplicando… 0%")
         Thread {
-            val r = Applier.apply(this, l, true)
-            h.post { flash(if (r.failed == 0) "Aplicado: ${r.ok} ajustes" else "Aplicado: ${r.ok} de ${r.ok + r.failed}") }
+            val r = Applier.apply(this, l, true) { f, t ->
+                h.post { status.animate().cancel(); status.alpha = 1f; status.text = "$t ${(f * 100).toInt()}%" }
+            }
+            h.post { flash(if (r.failed == 0) "Listo: ${r.ok} comandos aplicados" else "Listo: ${r.ok} de ${r.ok + r.failed} comandos") }
         }.start()
     }
 

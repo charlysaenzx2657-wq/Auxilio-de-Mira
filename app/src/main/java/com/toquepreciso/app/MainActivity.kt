@@ -28,6 +28,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,6 +74,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -154,7 +156,13 @@ fun App(tick: Int, askNotif: () -> Unit) {
         mutableStateMapOf<String, Boolean>().also { m -> EXTRAS.forEach { m[it.first] = store.extra(it.first) } }
     }
     var shown by remember { mutableStateOf(false) }
-    var plan by remember { mutableIntStateOf(0) }
+    var counts by remember { mutableStateOf<Map<Level, Int>>(emptyMap()) }
+    val plan = counts[level] ?: 0
+    var loading by remember { mutableStateOf(false) }
+    var prog by remember { mutableStateOf(0f) }
+    var phase by remember { mutableStateOf("") }
+    var done by remember { mutableStateOf<Applier.ApplyResult?>(null) }
+    var loadLevel by remember { mutableStateOf(Level.MEDIA) }
 
     val canSys = remember(tick, local) { Perms.canWriteSystem(ctx) }
     val canSec = remember(tick, local) { Perms.canWriteSecure(ctx) }
@@ -164,6 +172,12 @@ fun App(tick: Int, askNotif: () -> Unit) {
     var overlayOn by remember(tick, local) { mutableStateOf(OverlayService.running) }
 
     LaunchedEffect(Unit) { shown = true }
+    LaunchedEffect(done) {
+        if (done != null) {
+            delay(4000)
+            loading = false
+        }
+    }
 
     LaunchedEffect(scanKey) {
         scanRes = null
@@ -172,7 +186,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
         val r = withContext(Dispatchers.IO) { Applier.scan(ctx) }
         job.join()
         scanRes = r
-        plan = withContext(Dispatchers.IO) { Applier.planSize(ctx) }
+        counts = withContext(Dispatchers.IO) { Level.values().associateWith { Applier.planSize(ctx, it) } }
     }
 
     fun report(r: Applier.ApplyResult, l: Level) {
@@ -181,26 +195,32 @@ fun App(tick: Int, askNotif: () -> Unit) {
         else "Aplicados ${r.ok} de ${r.ok + r.failed}; ${r.failed} no se conservaron (mira el registro)."
     }
 
-    fun choose(l: Level) {
-        level = l
-        store.level = l
+    fun runApply(l: Level) {
+        if (loading) return
+        loading = true
+        done = null
+        prog = 0f
+        phase = "Preparando"
+        loadLevel = l
         scope.launch {
-            val r = withContext(Dispatchers.IO) { Applier.apply(ctx, l, true) }
+            val r = withContext(Dispatchers.IO) { Applier.apply(ctx, l, true) { f, t -> prog = f; phase = t } }
+            prog = 1f
+            done = r
             report(r, l)
         }
     }
 
-    fun applyWithAnimation() {
-        scope.launch {
-            fill.snapTo(0f)
-            fill.animateTo(1f, tween(1800, easing = LinearEasing))
-            val r = withContext(Dispatchers.IO) { Applier.apply(ctx, level, true) }
-            report(r, level)
-            delay(600)
-            fill.animateTo(0f, tween(400))
-        }
+    fun choose(l: Level) {
+        level = l
+        store.level = l
+        runApply(l)
     }
 
+    fun applyWithAnimation() {
+        runApply(level)
+    }
+
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
             .fillMaxSize()
@@ -242,7 +262,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
         }
 
         // Sensibilidad
-        Level.values().forEach { l -> LevelCard(l, l == level) { choose(l) } }
+        Level.values().forEach { l -> LevelCard(l, l == level, counts[l]) { choose(l) } }
 
         // Permisos
         SectionTitle("Permisos")
@@ -368,6 +388,8 @@ fun App(tick: Int, askNotif: () -> Unit) {
         if (msg.isNotEmpty()) Text(msg, color = MUT, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
         Spacer(Modifier.height(12.dp))
     }
+    if (loading) LoadingScreen(loadLevel, prog, phase, done) { loading = false }
+    }
 }
 
 @Composable
@@ -387,7 +409,7 @@ private fun PulseDot(active: Boolean) {
 }
 
 @Composable
-private fun LevelCard(l: Level, selected: Boolean, onClick: () -> Unit) {
+private fun LevelCard(l: Level, selected: Boolean, count: Int?, onClick: () -> Unit) {
     val c = Color(l.color)
     val border by animateColorAsState(if (selected) c else Color.Transparent, tween(450), label = "border")
     val scale by animateFloatAsState(
@@ -413,6 +435,7 @@ private fun LevelCard(l: Level, selected: Boolean, onClick: () -> Unit) {
         Column {
             Text(l.label, color = INK, fontWeight = FontWeight.Bold, fontSize = 15.sp)
             Text(l.desc, color = MUT, fontSize = 12.sp)
+            if (count != null) Text("$count comandos disponibles", color = c, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -450,4 +473,51 @@ private fun GhostChip(text: String, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) { Text(text, color = INK, fontSize = 12.sp) }
+}
+
+@Composable
+private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.ApplyResult?, onClose: () -> Unit) {
+    val c = Color(l.color)
+    val p by animateFloatAsState(prog, tween(300), label = "prog")
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xE60B0F1D))
+            .pointerInput(Unit) { detectTapGestures { } },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .padding(32.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(CARD)
+                .border(1.dp, LINE, RoundedCornerShape(20.dp))
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                if (done == null) "Aplicando sensibilidad ${l.label.lowercase()}" else "Sensibilidad ${l.label.lowercase()} aplicada",
+                color = INK, fontWeight = FontWeight.Bold, fontSize = 16.sp
+            )
+            Spacer(Modifier.height(16.dp))
+            LinearProgressIndicator(
+                progress = { p },
+                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                color = c,
+                trackColor = LINE
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                if (done == null) "$phase ${(p * 100).toInt()}%" else "${done.ok} de ${done.ok + done.failed} comandos conservados",
+                color = MUT, fontSize = 13.sp
+            )
+            if (done != null) {
+                Spacer(Modifier.height(16.dp))
+                Box(
+                    Modifier.clip(RoundedCornerShape(12.dp)).background(c).clickable(onClick = onClose)
+                        .padding(horizontal = 28.dp, vertical = 10.dp)
+                ) { Text("Listo", color = DARK, fontWeight = FontWeight.Bold) }
+            }
+        }
+    }
 }

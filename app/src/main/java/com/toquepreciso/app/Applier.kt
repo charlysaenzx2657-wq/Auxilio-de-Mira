@@ -250,13 +250,13 @@ object Applier {
         return out
     }
 
-    fun planSize(ctx: Context): Int {
+    fun planSize(ctx: Context, level: Level? = null): Int {
         val s = Store(ctx)
-        return buildPlan(ctx, s, s.level).size
+        return buildPlan(ctx, s, level ?: s.level).size
     }
 
     // Escribe todo: directo cuando Android deja, y en lotes por terminal (Shizuku) cuando lo bloquea.
-    private fun execute(ctx: Context, s: Store, plan: List<W>): Pair<Int, List<String>> {
+    private fun execute(ctx: Context, s: Store, plan: List<W>, onProgress: ((Float, String) -> Unit)? = null): Pair<Int, List<String>> {
         val b = s.backup()
         for (w in plan) {
             val id = "${w.t}:${w.k}"
@@ -264,20 +264,26 @@ object Applier {
         }
         s.saveBackup(b)
         val before = plan.associate { "${it.t}:${it.k}" to get(ctx, it.t, it.k) }
-        val direct = plan.associateWith { rawPut(ctx, it.t, it.k, it.v) }
+        val direct = HashMap<W, Boolean>()
+        plan.forEachIndexed { i, w ->
+            direct[w] = rawPut(ctx, w.t, w.k, w.v)
+            if (i % 5 == 0) onProgress?.invoke(0.05f + 0.55f * (i + 1) / plan.size, "Aplicando comandos")
+        }
         val blocked = plan.filter { direct[it] != true }
         if (blocked.isNotEmpty()) {
             Trace.log("Android bloqueó ${blocked.size} escrituras directas; se reintentan por terminal (Shizuku)")
-            blocked.chunked(30).forEach { chunk ->
+            blocked.chunked(30).forEachIndexed { ci, chunk ->
                 val cmd = chunk.joinToString("; ") { "cmd settings put ${it.t} ${it.k} '${it.v}'" }
                 val (code, out) = Perms.shOut(cmd)
                 if (code != 0) Trace.err("terminal (lote de ${chunk.size}) código $code $out")
+                onProgress?.invoke(0.6f + 0.2f * minOf(1f, (ci + 1) * 30f / blocked.size), "Reintentando por Shizuku")
             }
         }
         var ok = 0
         val failed = mutableListOf<String>()
         for (w in plan) {
             val id = "${w.t}:${w.k}"
+            if ((ok + failed.size) % 5 == 0) onProgress?.invoke(0.8f + 0.2f * (ok + failed.size + 1) / plan.size, "Verificando")
             val after = get(ctx, w.t, w.k)
             val a = after?.toFloatOrNull()
             val c = w.v.toFloatOrNull()
@@ -290,17 +296,19 @@ object Applier {
     }
 
     @Synchronized
-    fun apply(ctx: Context, level: Level, notify: Boolean): ApplyResult {
+    fun apply(ctx: Context, level: Level, notify: Boolean, onProgress: ((Float, String) -> Unit)? = null): ApplyResult {
         val s = Store(ctx)
         Trace.log("=== APLICAR nivel ${level.label} ===")
+        onProgress?.invoke(0f, "Preparando")
         val plan = buildPlan(ctx, s, level)
-        val (ok, failed) = execute(ctx, s, plan)
+        val (ok, failed) = execute(ctx, s, plan, onProgress)
         val bad = failed.size
         Trace.log("Resultado: $ok bien, $bad fallaron" + if (failed.isEmpty()) "" else " -> " + failed.joinToString(", "))
         if (notify) {
             if (bad == 0) Notif.applied(ctx, "Sensibilidad ${level.label.lowercase()} aplicada", "$ok ajustes se aplicaron correctamente.")
             else Notif.applied(ctx, "Sensibilidad ${level.label.lowercase()} aplicada", "$ok de ${ok + bad} ajustes se conservaron. Detalle en el registro (ADB).")
         }
+        onProgress?.invoke(1f, "Listo")
         return ApplyResult(ok, bad)
     }
 
