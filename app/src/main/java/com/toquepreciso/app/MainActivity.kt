@@ -1,6 +1,8 @@
 package com.toquepreciso.app
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -70,6 +72,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -169,6 +172,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
     }
 
     fun report(r: Applier.ApplyResult, l: Level) {
+        local++
         msg = if (r.failed == 0) "Sensibilidad ${l.label.lowercase()} aplicada (${r.ok} ajustes)"
         else "Se aplicó parcialmente: ${r.failed} ajustes fallaron. Revisa los permisos."
     }
@@ -342,6 +346,20 @@ fun App(tick: Int, askNotif: () -> Unit) {
             }
         }
         GhostButton("Escanear de nuevo") { scanKey++ }
+
+        SectionTitle("Registro (ADB: adb logcat -s AuxilioDeMira)")
+        val logLines = remember(msg, scanRes, local) { Trace.lines().takeLast(40) }
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(CARD).padding(10.dp)) {
+            Text(
+                if (logLines.isEmpty()) "Sin registros todavía" else logLines.joinToString("\n"),
+                color = MUT, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+            )
+        }
+        GhostButton("Copiar registro") {
+            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("registro", Trace.text()))
+            msg = "Registro copiado."
+        }
 
         if (msg.isNotEmpty()) Text(msg, color = MUT, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
         Spacer(Modifier.height(12.dp))
