@@ -56,10 +56,7 @@ object Applier {
             SEC -> Settings.Secure.putString(ctx.contentResolver, key, value)
             else -> Settings.Global.putString(ctx.contentResolver, key, value)
         }
-    } catch (e: Exception) {
-        Trace.err("settings put $t $key $value lanzó ${e.javaClass.simpleName}: ${e.message}")
-        false
-    }
+    } catch (e: Exception) { false }
 
     // Guarda el valor original la primera vez que se toca una clave.
     private fun remember(ctx: Context, s: Store, t: String, key: String) {
@@ -117,7 +114,7 @@ object Applier {
         return m
     }
 
-    private val OEM = Regex("touch_sensitiv|high_touch_sens")
+    private val OEM = Regex("touch_sensitiv|high_touch_sens|glove|touch_boost|game_touch|gaming_touch|touch_response")
 
     private fun oemFrom(maps: Map<String, Map<String, String?>>): List<Pair<String, String>> {
         val out = mutableListOf<Pair<String, String>>()
@@ -139,8 +136,8 @@ object Applier {
         for ((t, m) in maps) for ((k, v) in m) {
             if (CATALOG.containsMatchIn(k) && n < 400) { n++; Trace.log("candidato $t:$k=$v") }
         }
-        val extra = maps.flatMap { (t, m) -> m.keys.filter { FRICTION.containsMatchIn(it) || VELOCITY.containsMatchIn(it) }.map { t to it } }
-        Trace.log("Conocidos: $known, del fabricante: ${oem.size}, fricción/velocidad: ${extra.size}, candidatos listados: $n")
+        val extra = maps.flatMap { (t, m) -> m.keys.filter { factorKey(it) != null || HAPTIC.containsMatchIn(it) }.map { t to it } }
+        Trace.log("Conocidos: $known, del fabricante: ${oem.size}, de escaneo (fricción, velocidad, umbral, respuesta, vibración): ${extra.size}, candidatos listados: $n")
         return ScanResult(total, known + oem.size + extra.size, oem)
     }
 
@@ -152,7 +149,20 @@ object Applier {
     }
 
     private val FRICTION = Regex("friction|damping|deceler|decay|inertia|overscroll")
-    private val VELOCITY = Regex("scroll_speed|scroll_velocity|fling|velocity|swipe|scroll_scale|scroll_multiplier|touch_speed|drag_speed")
+    private val THRESH = Regex("slop|tap_duration|double_tap|press_timeout|(touch|tap|gesture|scroll|swipe|pointer|input|drag)_([a-z_]*_)?(threshold|timeout|delay|duration|distance)")
+    private val RATE = Regex("(touch|input|pointer|gesture)_([a-z_]*_)?(rate|sampling|polling|boost|response)|sampling_rate|polling_rate")
+    private val HAPTIC = Regex("haptic|touch_vibrat|tap_vibrat")
+    private val EXCL = Regex("enable|enabled|mode|state|count|_id|version|timestamp|last_|setup|user_|bluetooth|wifi|account")
+    private val VELOCITY = Regex("scroll_speed|scroll_velocity|fling|velocity|swipe|scroll_scale|scroll_multiplier|touch_speed|drag_speed|acceleration|pointer_(scale|sens[a-z_]*)")
+
+    // Devuelve el control (fr, sv, th o ra) que gobierna una clave, o null si no es de ninguna familia.
+    private fun factorKey(k: String): String? = when {
+        FRICTION.containsMatchIn(k) -> "fr"
+        VELOCITY.containsMatchIn(k) -> "sv"
+        THRESH.containsMatchIn(k) && !EXCL.containsMatchIn(k) -> "th"
+        RATE.containsMatchIn(k) && !EXCL.containsMatchIn(k) -> "ra"
+        else -> null
+    }
     private val CATALOG = Regex("touch|scroll|fling|friction|gesture|pointer|tap_|press|slop|velocity|sensitiv|haptic|vibrat|swipe|drag|damping|deceler|inertia|sampling|polling|palm|edge|finger|hover|double_tap|click|game")
 
     data class Cand(val t: String, val k: String, val v: String?, val cat: String) {
@@ -193,38 +203,103 @@ object Applier {
         return out
     }
 
+    private data class W(val t: String, val k: String, val v: String)
+
+    // Arma la lista completa de ajustes del botón: los conocidos + todo lo que encontró el escaneo.
+    private fun buildPlan(ctx: Context, s: Store, level: Level): List<W> {
+        fun v(id: String) = s.value(level, Knobs.all.first { it.id == id })
+        val out = mutableListOf<W>()
+        out += W(SYS, "pointer_speed", v("ptr").toInt().toString())
+        out += W(SEC, "long_press_timeout", v("lp").toInt().toString())
+        out += W(SEC, "multi_press_timeout", v("dt").toInt().toString())
+        val an = v("an").toString()
+        out += W(GLB, "window_animation_scale", an)
+        out += W(GLB, "transition_animation_scale", an)
+        out += W(GLB, "animator_duration_scale", an)
+        if (!s.extra("hz")) {
+            val r = supportedRate(ctx, v("hz")).toString()
+            out += W(SYS, "min_refresh_rate", r)
+            out += W(SYS, "peak_refresh_rate", r)
+        }
+        val hp = v("hp").toInt().coerceIn(0, 2)
+        out += W(SYS, "haptic_feedback_enabled", if (hp == 0) "0" else "1")
+        out += W(SYS, "haptic_feedback_intensity", listOf("0", "1", "3")[hp])
+
+        val maps = listOf(SYS, SEC, GLB).associateWith { readAll(ctx, it) }
+        val b = s.backup()
+        val known = KNOWN.map { "${it.first}:${it.second}" }.toSet()
+        for ((t, m) in maps) for ((k, cur) in m) {
+            val id = "$t:$k"
+            if (id in known || cur == null) continue
+            if (OEM.containsMatchIn(k) && (cur == "0" || cur == "1")) {
+                out += W(t, k, if (level == Level.BAJA) "0" else "1")
+                continue
+            }
+            if (HAPTIC.containsMatchIn(k) && (cur == "0" || cur == "1" || cur == "2" || cur == "3")) {
+                out += W(t, k, if (cur == "0" || cur == "1") (if (hp == 0) "0" else "1") else listOf("0", "1", "3")[hp])
+                continue
+            }
+            val fk = factorKey(k) ?: continue
+            val factor = if (fk == "ra") 2f - v("th") else v(fk)
+            val orig = if (b.has(id) && !b.isNull(id)) b.getString(id) else cur
+            val base = orig.toFloatOrNull() ?: continue
+            if (base <= 0f || orig == "1") continue
+            val nv = base * factor
+            out += W(t, k, if (orig.contains('.')) String.format(java.util.Locale.US, "%.5f", nv) else nv.toInt().toString())
+        }
+        return out
+    }
+
+    fun planSize(ctx: Context): Int {
+        val s = Store(ctx)
+        return buildPlan(ctx, s, s.level).size
+    }
+
+    // Escribe todo: directo cuando Android deja, y en lotes por terminal (Shizuku) cuando lo bloquea.
+    private fun execute(ctx: Context, s: Store, plan: List<W>): Pair<Int, List<String>> {
+        val b = s.backup()
+        for (w in plan) {
+            val id = "${w.t}:${w.k}"
+            if (!b.has(id)) b.put(id, get(ctx, w.t, w.k) ?: JSONObject.NULL)
+        }
+        s.saveBackup(b)
+        val before = plan.associate { "${it.t}:${it.k}" to get(ctx, it.t, it.k) }
+        val direct = plan.associateWith { rawPut(ctx, it.t, it.k, it.v) }
+        val blocked = plan.filter { direct[it] != true }
+        if (blocked.isNotEmpty()) {
+            Trace.log("Android bloqueó ${blocked.size} escrituras directas; se reintentan por terminal (Shizuku)")
+            blocked.chunked(30).forEach { chunk ->
+                val cmd = chunk.joinToString("; ") { "cmd settings put ${it.t} ${it.k} '${it.v}'" }
+                val (code, out) = Perms.shOut(cmd)
+                if (code != 0) Trace.err("terminal (lote de ${chunk.size}) código $code $out")
+            }
+        }
+        var ok = 0
+        val failed = mutableListOf<String>()
+        for (w in plan) {
+            val id = "${w.t}:${w.k}"
+            val after = get(ctx, w.t, w.k)
+            val a = after?.toFloatOrNull()
+            val c = w.v.toFloatOrNull()
+            val same = after != null && (after == w.v || (a != null && c != null && abs(a - c) < 0.0001f))
+            val via = if (direct[w] == true) "" else " (vía Shizuku)"
+            Trace.log("settings put ${w.t} ${w.k} ${w.v} | antes=${before[id]} después=$after | ${if (same) "OK" else "FALLÓ/IGNORADO"}$via")
+            if (same) ok++ else failed += id
+        }
+        return ok to failed
+    }
+
+    @Synchronized
     fun apply(ctx: Context, level: Level, notify: Boolean): ApplyResult {
         val s = Store(ctx)
         Trace.log("=== APLICAR nivel ${level.label} ===")
-        fun v(id: String) = s.value(level, Knobs.all.first { it.id == id })
-        var ok = 0
-        var bad = 0
-        val failed = mutableListOf<String>()
-        fun put(t: String, k: String, x: String) { if (set(ctx, s, t, k, x)) ok++ else { bad++; failed += "$t $k" } }
-
-        put(SYS, "pointer_speed", v("ptr").toInt().toString())
-        put(SEC, "long_press_timeout", v("lp").toInt().toString())
-        put(SEC, "multi_press_timeout", v("dt").toInt().toString())
-        val an = v("an").toString()
-        put(GLB, "window_animation_scale", an)
-        put(GLB, "transition_animation_scale", an)
-        put(GLB, "animator_duration_scale", an)
-        if (!s.extra("hz")) {
-            val r = supportedRate(ctx, v("hz")).toString()
-            put(SYS, "min_refresh_rate", r)
-            put(SYS, "peak_refresh_rate", r)
-        }
-        val hp = v("hp").toInt().coerceIn(0, 2)
-        put(SYS, "haptic_feedback_enabled", if (hp == 0) "0" else "1")
-        put(SYS, "haptic_feedback_intensity", listOf("0", "1", "3")[hp])
-        oemKeys(ctx).forEach { (t, k) -> put(t, k, if (level == Level.BAJA) "0" else "1") }
-        scaleKeys(ctx, s, FRICTION, v("fr"), "fricción").forEach { (t, k, x) -> put(t, k, x) }
-        scaleKeys(ctx, s, VELOCITY, v("sv"), "velocidad").forEach { (t, k, x) -> put(t, k, x) }
+        val plan = buildPlan(ctx, s, level)
+        val (ok, failed) = execute(ctx, s, plan)
+        val bad = failed.size
         Trace.log("Resultado: $ok bien, $bad fallaron" + if (failed.isEmpty()) "" else " -> " + failed.joinToString(", "))
-
         if (notify) {
             if (bad == 0) Notif.applied(ctx, "Sensibilidad ${level.label.lowercase()} aplicada", "$ok ajustes se aplicaron correctamente.")
-            else Notif.applied(ctx, "Aplicada parcialmente", "$bad ajustes fallaron. Abre la app y revisa los permisos.")
+            else Notif.applied(ctx, "Sensibilidad ${level.label.lowercase()} aplicada", "$ok de ${ok + bad} ajustes se conservaron. Detalle en el registro (ADB).")
         }
         return ApplyResult(ok, bad)
     }
@@ -335,7 +410,7 @@ object Perms {
     private fun sh(cmd: String): Boolean = shOut(cmd).first == 0
 
     fun shellPut(t: String, key: String, value: String): Boolean {
-        val (code, out) = shOut("settings put $t $key '$value'")
+        val (code, out) = shOut("cmd settings put $t $key '$value'")
         if (code != 0) Trace.err("terminal: settings put $t $key $value -> código $code $out")
         return code == 0
     }
