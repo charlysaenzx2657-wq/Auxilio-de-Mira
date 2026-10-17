@@ -3,12 +3,16 @@ package com.toquepreciso.app
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.IntentFilter
 import android.content.Context
 import android.content.Intent
+import android.hardware.display.DisplayManager
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Display
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -48,6 +52,7 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,6 +65,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -83,6 +89,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -214,7 +221,17 @@ fun App(tick: Int, askNotif: () -> Unit) {
         phase = "Preparando"
         loadLevel = l
         scope.launch {
-            val r = withContext(Dispatchers.IO) { Applier.apply(ctx, l, true) { f, t -> prog = f; phase = t } }
+            var last = 0L
+            val r = withContext(Dispatchers.IO) {
+                Applier.apply(ctx, l, true) { f, t ->
+                    val now = System.nanoTime()
+                    if (now - last > 60_000_000L || f >= 1f) {
+                        last = now
+                        prog = f
+                        phase = t
+                    }
+                }
+            }
             prog = 1f
             done = r
             report(r, l)
@@ -271,14 +288,15 @@ fun App(tick: Int, askNotif: () -> Unit) {
             StatTile("Compatibles", scanRes?.supported?.toString() ?: "…", Modifier.weight(1f))
             StatTile("Por botón", if (plan > 0) plan.toString() else "…", Modifier.weight(1f))
         }
+        LiveTiles()
 
         // Escaneo
         Box(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(CutCornerShape(topStart = 12.dp, bottomEnd = 12.dp))
                 .background(CARD)
-                .border(1.dp, LINE, RoundedCornerShape(12.dp))
+                .border(1.dp, LINE, CutCornerShape(topStart = 12.dp, bottomEnd = 12.dp))
                 .padding(12.dp)
         ) {
             Column {
@@ -304,7 +322,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
 
         // Permisos
         SectionTitle("Permisos")
-        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CARD).padding(horizontal = 14.dp, vertical = 6.dp)) {
+        Box(Modifier.fillMaxWidth().clip(CutCornerShape(topStart = 14.dp, bottomEnd = 14.dp)).background(CARD).padding(horizontal = 14.dp, vertical = 6.dp)) {
             Column {
                 PermRow("Escritura de ajustes", canSys, "Permitir") {
                     openSettings(ctx, Settings.ACTION_MANAGE_WRITE_SETTINGS, data = true)
@@ -444,7 +462,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(CutCornerShape(topStart = 16.dp, bottomEnd = 16.dp))
                 .background(Brush.horizontalGradient(listOf(c, c.copy(alpha = 0.7f))))
                 .clickable { applyWithAnimation() }
                 .padding(16.dp),
@@ -456,7 +474,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
             )
         }
     }
-    if (loading) LoadingScreen(loadLevel, prog, phase, done) { loading = false }
+    if (loading) LoadingScreen(loadLevel, { prog }, { phase }, done) { loading = false }
     }
 }
 
@@ -491,9 +509,9 @@ private fun StatusChip(text: String, ok: Boolean) {
 private fun StatTile(label: String, value: String, modifier: Modifier) {
     Column(
         modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(CutCornerShape(topStart = 12.dp, bottomEnd = 12.dp))
             .background(CARD)
-            .border(1.dp, LINE, RoundedCornerShape(14.dp))
+            .border(1.dp, LINE, CutCornerShape(topStart = 12.dp, bottomEnd = 12.dp))
             .padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -558,7 +576,7 @@ private fun LevelCard(l: Level, selected: Boolean, count: Int?, tag: String?, on
     val glow by rememberInfiniteTransition(label = "glow").animateFloat(
         0.25f, 0.6f, infiniteRepeatable(tween(1600), RepeatMode.Reverse), label = "g"
     )
-    val shape = RoundedCornerShape(18.dp)
+    val shape = CutCornerShape(topStart = 20.dp, bottomEnd = 20.dp)
     Row(
         Modifier
             .fillMaxWidth()
@@ -577,6 +595,11 @@ private fun LevelCard(l: Level, selected: Boolean, count: Int?, tag: String?, on
             Text(l.label.uppercase(), color = INK, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, letterSpacing = 1.sp)
             Text(l.desc, color = MUT, fontSize = 12.sp)
             if (tag != null) Text(tag, color = c, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                val lit = when (l) { Level.BAJA -> 3; Level.MEDIA -> 6; Level.MAX -> 10 }
+                for (i in 0 until 10) Box(Modifier.size(width = 10.dp, height = 4.dp).background(if (i < lit) c else LINE))
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(count?.toString() ?: "…", color = c, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
@@ -630,13 +653,16 @@ private fun GhostChip(text: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.ApplyResult?, onClose: () -> Unit) {
+private fun LoadingScreen(l: Level, progOf: () -> Float, phaseOf: () -> String, done: Applier.ApplyResult?, onClose: () -> Unit) {
     val c = Color(l.color)
-    val p by animateFloatAsState(prog, tween(300), label = "prog")
+    val phase = phaseOf()
+    val p by animateFloatAsState(progOf(), tween(250), label = "prog")
     val t = rememberInfiniteTransition(label = "load")
     val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "spin")
     val pulse by t.animateFloat(0.92f, 1.08f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulse")
     val dots by t.animateFloat(0f, 4f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "dots")
+    val dotCount by remember { derivedStateOf { dots.toInt().coerceIn(0, 3) } }
+    val pct by remember { derivedStateOf { (p * 100).toInt() } }
     val pop by animateFloatAsState(
         if (done != null) 1f else 0f,
         spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessLow), label = "pop"
@@ -661,7 +687,7 @@ private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.Ap
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.fillMaxSize().rotate(if (done == null) spin else 0f)) {
+                Canvas(Modifier.fillMaxSize().graphicsLayer { rotationZ = if (done == null) spin else 0f }) {
                     val sw = 6.dp.toPx()
                     if (done == null) {
                         drawArc(
@@ -676,7 +702,7 @@ private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.Ap
                 }
                 Image(
                     painterResource(R.drawable.logo_emblem), null,
-                    Modifier.size(92.dp).scale(if (done == null) pulse else 0.9f + 0.1f * pop).clip(CircleShape)
+                    Modifier.size(92.dp).graphicsLayer { val sc = if (done == null) pulse else 0.9f + 0.1f * pop; scaleX = sc; scaleY = sc }.clip(CircleShape)
                 )
             }
             Spacer(Modifier.height(18.dp))
@@ -703,7 +729,7 @@ private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.Ap
             }
             Spacer(Modifier.height(10.dp))
             Text(
-                if (done == null) phase + ".".repeat(dots.toInt().coerceIn(0, 3)) + " " + (p * 100).toInt() + "%"
+                if (done == null) phase + ".".repeat(dotCount) + " " + pct + "%"
                 else "${done.ok} de ${done.ok + done.failed} comandos conservados",
                 color = MUT, fontSize = 13.sp
             )
@@ -715,5 +741,25 @@ private fun LoadingScreen(l: Level, prog: Float, phase: String, done: Applier.Ap
                 ) { Text("Listo", color = DARK, fontWeight = FontWeight.Bold) }
             }
         }
+    }
+}
+
+@Composable
+private fun LiveTiles() {
+    val ctx = LocalContext.current
+    var hz by remember { mutableStateOf(0f) }
+    var temp by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            hz = dm.getDisplay(Display.DEFAULT_DISPLAY)?.refreshRate ?: 0f
+            val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            temp = (i?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f
+            delay(2000)
+        }
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        StatTile("Pantalla ahora", if (hz > 0f) "${hz.toInt()} Hz" else "…", Modifier.weight(1f))
+        StatTile("Temperatura", if (temp > 0f) "$temp °C" else "…", Modifier.weight(1f))
     }
 }

@@ -3,13 +3,22 @@ package com.toquepreciso.app
 import android.animation.ValueAnimator
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.res.ColorStateList
 import android.content.pm.ServiceInfo
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.SweepGradient
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.display.DisplayManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -17,6 +26,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.transition.AutoTransition
 import android.transition.TransitionManager
+import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -28,6 +38,7 @@ import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
@@ -67,6 +78,26 @@ class OverlayService : Service() {
     private lateinit var logoView: ImageView
     private var spin: ValueAnimator? = null
     private var applying = false
+    private var loadRoot: FrameLayout? = null
+    private var loadBar: ProgressBar? = null
+    private var loadPhase: TextView? = null
+    private var loadTitle: TextView? = null
+    private var loadRing: RingView? = null
+    private var loadAnim: ValueAnimator? = null
+    private lateinit var metrics: TextView
+    private val metricsRun = object : Runnable {
+        override fun run() {
+            metrics.text = metricsText()
+            h.postDelayed(this, 2000)
+        }
+    }
+
+    private fun metricsText(): String {
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val hz = dm.getDisplay(Display.DEFAULT_DISPLAY)?.refreshRate ?: 0f
+        val t = (registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10f
+        return "${hz.toInt()} Hz     $t °C"
+    }
     private lateinit var collapseBtn: TextView
     private val levelTvs = mutableListOf<TextView>()
     private val counts = mutableMapOf<Level, Int>()
@@ -208,6 +239,11 @@ class OverlayService : Service() {
         header.addView(collapseBtn)
         header.addView(minBtn)
         panel.addView(header)
+        metrics = tv(metricsText(), 10f, C_MUT).apply {
+            layoutParams = lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+        }
+        panel.addView(metrics)
+        h.postDelayed(metricsRun, 2000)
 
         // selector de tres botones con pastilla deslizante
         val trio = FrameLayout(this).apply {
@@ -396,32 +432,125 @@ class OverlayService : Service() {
         val l = store.level
         applyBtn.text = "APLICANDO…"
         flash("Aplicando… 0%")
-        spin?.cancel()
-        spin = ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = 900
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-            addUpdateListener { logoView.rotation = it.animatedValue as Float }
-            start()
-        }
+        showLoading(l)
+        var last = 0L
         Thread {
             val r = Applier.apply(this, l, true) { f, t ->
-                h.post {
-                    status.animate().cancel()
-                    status.alpha = 1f
-                    status.text = "$t ${(f * 100).toInt()}%"
-                    applyBtn.alpha = 0.55f + 0.45f * f
+                val now = System.nanoTime()
+                if (now - last > 50_000_000L || f >= 1f) {
+                    last = now
+                    h.post {
+                        status.animate().cancel()
+                        status.alpha = 1f
+                        status.text = "$t ${(f * 100).toInt()}%"
+                        updateLoading(f, t)
+                    }
                 }
             }
             h.post {
-                spin?.cancel()
-                logoView.rotation = 0f
                 applyBtn.text = "APLICAR"
-                applyBtn.alpha = 1f
                 applying = false
                 flash(if (r.failed == 0) "Listo: ${r.ok} comandos aplicados" else "Listo: ${r.ok} de ${r.ok + r.failed} comandos")
+                finishLoading(r.ok, r.ok + r.failed)
             }
         }.start()
+    }
+
+    // Ventana flotante aparte que muestra la carga mientras se aplican los comandos.
+    private fun showLoading(l: Level) {
+        hideLoading(false)
+        val ring = RingView(this).apply { color = l.color }
+        val emblem = ImageView(this).apply {
+            setImageResource(R.drawable.logo_emblem)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            circle(this)
+        }
+        val ringBox = FrameLayout(this).apply {
+            addView(ring, FrameLayout.LayoutParams(dp(104), dp(104), Gravity.CENTER))
+            addView(emblem, FrameLayout.LayoutParams(dp(72), dp(72), Gravity.CENTER))
+            layoutParams = lp(dp(104), dp(104))
+        }
+        val title = tv("Aplicando sensibilidad ${l.label.lowercase()}", 13f, C_INK, true).apply {
+            gravity = Gravity.CENTER
+            layoutParams = lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+        }
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progressTintList = ColorStateList.valueOf(l.color)
+            progressBackgroundTintList = ColorStateList.valueOf(C_LINE)
+            layoutParams = lp(dp(200), dp(6)).apply { topMargin = dp(10) }
+        }
+        val phase = tv("Preparando 0%", 11f, C_MUT).apply {
+            gravity = Gravity.CENTER
+            layoutParams = lp(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(22), dp(20), dp(22), dp(18))
+            background = shape(0xF2050A14.toInt(), 22).apply { setStroke(dp(1), l.color) }
+            addView(ringBox)
+            addView(title)
+            addView(bar)
+            addView(phase)
+        }
+        val root = FrameLayout(this).apply {
+            addView(card)
+            alpha = 0f
+        }
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.CENTER }
+        wm.addView(root, params)
+        root.animate().alpha(1f).setDuration(250).start()
+        loadRoot = root
+        loadBar = bar
+        loadPhase = phase
+        loadTitle = title
+        loadRing = ring
+        loadAnim = ValueAnimator.ofFloat(0f, 360f).apply {
+            duration = 1100
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener {
+                ring.angle = it.animatedValue as Float
+                ring.invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun updateLoading(f: Float, t: String) {
+        val pct = (f * 100).toInt()
+        loadBar?.setProgress(pct, true)
+        loadPhase?.text = "$t $pct%"
+    }
+
+    private fun finishLoading(ok: Int, total: Int) {
+        val root = loadRoot ?: return
+        loadAnim?.cancel()
+        loadRing?.let { it.solid = true; it.invalidate() }
+        loadBar?.setProgress(100, true)
+        loadTitle?.text = "Sensibilidad aplicada"
+        loadPhase?.text = "$ok de $total comandos conservados"
+        h.postDelayed({ if (loadRoot === root) hideLoading(true) }, 1600)
+    }
+
+    private fun hideLoading(animate: Boolean) {
+        val root = loadRoot ?: return
+        loadRoot = null
+        loadAnim?.cancel()
+        if (animate) {
+            root.animate().alpha(0f).setDuration(300).withEndAction {
+                try { wm.removeView(root) } catch (e: Exception) { }
+            }.start()
+        } else {
+            try { wm.removeView(root) } catch (e: Exception) { }
+        }
     }
 
     private fun refreshLevel(animate: Boolean) {
@@ -585,10 +714,44 @@ class OverlayService : Service() {
         running = false
         pulse?.cancel()
         h.removeCallbacksAndMessages(null)
+        if (built) hideLoading(false)
         if (built) {
             try { wm.removeView(panel) } catch (e: Exception) { }
             try { wm.removeView(bubble) } catch (e: Exception) { }
         }
         super.onDestroy()
+    }
+}
+
+// Anillo giratorio de la ventana de carga (dibujo ligero para que se vea fluido).
+private class RingView(ctx: Context) : View(ctx) {
+    var color = 0xFF19C8FF.toInt()
+    var angle = 0f
+    var solid = false
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private var sweep: SweepGradient? = null
+
+    override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
+        sweep = SweepGradient(w / 2f, h / 2f, intArrayOf(Color.TRANSPARENT, color), null)
+    }
+
+    override fun onDraw(c: Canvas) {
+        val sw = 6f * resources.displayMetrics.density
+        paint.strokeWidth = sw
+        val r = RectF(sw / 2, sw / 2, width - sw / 2, height - sw / 2)
+        if (solid) {
+            paint.shader = null
+            paint.color = color
+            c.drawArc(r, 0f, 360f, false, paint)
+        } else {
+            paint.shader = sweep
+            c.save()
+            c.rotate(angle, width / 2f, height / 2f)
+            c.drawArc(r, 0f, 280f, false, paint)
+            c.restore()
+        }
     }
 }
