@@ -69,8 +69,10 @@ class OverlayService : Service() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density + 0.5f).toInt()
 
     private val applyRun = Runnable {
-        val r = Applier.apply(this, store.level, false)
-        flash(if (r.failed == 0) "Valores aplicados" else "Parcial: ${r.failed} fallaron")
+        Thread {
+            val r = Applier.apply(this, store.level, false)
+            h.post { flash(if (r.failed == 0) "Valores aplicados" else "Parcial: ${r.failed} fallaron") }
+        }.start()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -334,8 +336,11 @@ class OverlayService : Service() {
         store.level = l
         refreshLevel(true)
         refreshers.forEach { it() }
-        val r = Applier.apply(this, l, true)
-        flash(if (r.failed == 0) "Aplicado: ${r.ok} ajustes" else "Parcial: ${r.failed} fallaron")
+        flash("Aplicando…")
+        Thread {
+            val r = Applier.apply(this, l, true)
+            h.post { flash(if (r.failed == 0) "Aplicado: ${r.ok} ajustes" else "Aplicado: ${r.ok} de ${r.ok + r.failed}") }
+        }.start()
     }
 
     private fun refreshLevel(animate: Boolean) {
