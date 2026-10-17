@@ -154,10 +154,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
         mutableStateMapOf<String, Boolean>().also { m -> EXTRAS.forEach { m[it.first] = store.extra(it.first) } }
     }
     var shown by remember { mutableStateOf(false) }
-    var cands by remember { mutableStateOf<List<Applier.Cand>>(emptyList()) }
-    var cat by remember { mutableStateOf("Fricción") }
-    var limit by remember { mutableIntStateOf(30) }
-    val picked = remember { mutableStateListOf<String>().also { it.addAll(store.picked()) } }
+    var plan by remember { mutableIntStateOf(0) }
 
     val canSys = remember(tick, local) { Perms.canWriteSystem(ctx) }
     val canSec = remember(tick, local) { Perms.canWriteSecure(ctx) }
@@ -175,13 +172,13 @@ fun App(tick: Int, askNotif: () -> Unit) {
         val r = withContext(Dispatchers.IO) { Applier.scan(ctx) }
         job.join()
         scanRes = r
-        cands = withContext(Dispatchers.IO) { Applier.candidates(ctx) }
+        plan = withContext(Dispatchers.IO) { Applier.planSize(ctx) }
     }
 
     fun report(r: Applier.ApplyResult, l: Level) {
         local++
         msg = if (r.failed == 0) "Sensibilidad ${l.label.lowercase()} aplicada (${r.ok} ajustes)"
-        else "Se aplicó parcialmente: ${r.failed} ajustes fallaron. Revisa los permisos."
+        else "Aplicados ${r.ok} de ${r.ok + r.failed}; ${r.failed} no se conservaron (mira el registro)."
     }
 
     fun choose(l: Level) {
@@ -230,7 +227,7 @@ fun App(tick: Int, askNotif: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     PulseDot(scanRes == null)
                     Spacer(Modifier.width(8.dp))
-                    val txt = scanRes?.let { "Escaneo listo: ${it.supported} compatibles (${it.total} ajustes en el sistema)" }
+                    val txt = scanRes?.let { "Escaneo listo: ${it.supported} compatibles (${it.total} ajustes en el sistema). Cada botón aplica $plan ajustes." }
                         ?: "Escaneando ajustes… ${(progress.value * 100).toInt()}%"
                     Text(txt, color = MUT, fontSize = 12.sp)
                 }
@@ -353,53 +350,6 @@ fun App(tick: Int, askNotif: () -> Unit) {
             }
         }
         GhostButton("Escanear de nuevo") { scanKey++ }
-
-        SectionTitle("Ajustes candidatos (fricción y velocidad)")
-        Text("Elige cuáles multiplican los botones. La lista Otros es solo para ver.", color = MUT, fontSize = 11.sp)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Fricción", "Velocidad", "Otros").forEach { c ->
-                val n = cands.count { it.cat == c }
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (cat == c) OKC else CARD)
-                        .clickable { cat = c; limit = 30 }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) { Text("$c ($n)", color = if (cat == c) DARK else INK, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
-            }
-        }
-        val shownCands = cands.filter { it.cat == cat }
-        if (cat != "Otros") Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GhostChip("Elegir todas") {
-                shownCands.forEach { if (it.id !in picked) picked.add(it.id) }
-                store.setPicked(picked.toSet())
-            }
-            GhostChip("Ninguna") {
-                picked.removeAll(shownCands.map { it.id }.toSet())
-                store.setPicked(picked.toSet())
-            }
-        }
-        shownCands.take(limit).forEach { c ->
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(CARD).padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(c.k, color = INK, fontSize = 12.sp)
-                    Text("${c.t} = ${c.v}", color = MUT, fontSize = 10.sp)
-                }
-                if (cat != "Otros") Switch(
-                    checked = c.id in picked,
-                    onCheckedChange = { on ->
-                        if (on) picked.add(c.id) else picked.remove(c.id)
-                        store.setPicked(picked.toSet())
-                    },
-                    colors = SwitchDefaults.colors(checkedTrackColor = OKC, checkedThumbColor = Color.White)
-                )
-            }
-        }
-        if (shownCands.size > limit) GhostButton("Mostrar 30 más (${shownCands.size - limit} restantes)") { limit += 30 }
-        if (cands.isEmpty()) Text("Sin candidatas todavía: espera a que termine el escaneo.", color = MUT, fontSize = 11.sp)
 
         SectionTitle("Registro (ADB: adb logcat -s AuxilioDeMira)")
         val logLines = remember(msg, scanRes, local) { Trace.lines().takeLast(40) }
